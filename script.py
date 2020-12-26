@@ -3,20 +3,28 @@ import pandas as pd
 from datetime import datetime
 import itertools
 from operator import itemgetter
-
+import seaborn as sns
 
 portfolio = pd.read_json('C:/Users/User/Desktop/Udacity/data/portfolio.json', orient='records', lines=True)
 profile = pd.read_json('C:/Users/User/Desktop/Udacity/data/profile.json', orient='records', lines=True)
 transcript = pd.read_json('C:/Users/User/Desktop/Udacity/data/transcript.json', orient='records', lines=True)
 
 ### Analysis of profile
+profile.dropna(inplace=True)
+profile['age'] = profile['age'].apply(lambda x: np.nan if x == 118 else x)
+profile['memberdays'] = datetime.today().date() - pd.to_datetime(profile['became_member_on'], format='%Y%m%d').dt.date
+profile['memberdays'] = profile['memberdays'].dt.days
+profile = pd.get_dummies(data=profile, columns=["gender"])
+profile.drop("gender_O", axis=1, inplace=True)
+
+
 ### Portfolio
 portfolio["channels"].str.join('|').str.get_dummies()
 portfolio = pd.concat([portfolio, portfolio["channels"].str.join('|').str.get_dummies()], axis = 1)
 portfolio.drop(columns = ["channels"], inplace=True)
 portfolio = pd.get_dummies(portfolio, columns=["offer_type"], prefix="d")
 portfolio.rename(columns={"id": "offer_id"}, inplace=True)
-portfolio
+
 
 offers = transcript.copy()
 offers["offer_id"] = offers["value"].apply(lambda x: list(x.values())[0] if list(x.keys())[0] in ("offer id", "offer_id") else np.nan)
@@ -46,7 +54,6 @@ def create_single_customer_history(customer_id):
     return one_person
     
 def reaction_to_offer(df, offer_id):
-    
     one_id = df[df["offer_id"] == offer_id]
     events = one_id["event"].to_list()
     
@@ -69,31 +76,59 @@ for index, person in enumerate(response_df.index):
         response = reaction_to_offer(one_person, offer)
         response_df.loc[person, offer] = response
         
-one_person = create_single_customer_history("e4052622e5ba45a8b96b59aba68cf068")
-one_person
+def summarise_spendings(person):
+    spendings = person.groupby("offer_id", as_index=False)["amount"].sum()
+    spendings = spendings.transpose()
+    spendings.columns = spendings.iloc[0]
+    spendings.drop(spendings.index[0], inplace=True)
+    spendings["person"] = person["person"].iloc[0]
+    spendings.set_index("person", inplace=True, drop=True)
+    return spendings
 
+def create_spendings(person_df):
+    cols = portfolio["offer_id"].to_list()
+    cols.extend(["without offer"])
+    persons = person_df["id"].to_list()
+    amount_df = pd.DataFrame(index=None, columns=cols)
+    
+    for index, person in enumerate(persons):
+        print(f'{index}/{len(persons)} verarbeitet...')
+        one_person_df = create_single_customer_history(person)
+        personal_spendings = summarise_spendings(one_person_df)
+        amount_df = pd.concat([amount_df, personal_spendings])
+    return amount_df
 
-def get_spendings(df):
-    amount = df.groupby("offer_id", as_index=False)["amount"].sum()
-    amount = amount.transpose()
-    amount.columns = amount.iloc[0]
-    amount.drop(amount.index[0], inplace=True)
-    amount["person"] = df["person"].iloc[0]
-    amount.set_index("person", inplace=True, drop=True)
-    return amount
+spendings_df = create_spendings(person_df=profile)
+spendings_df["with offer"] = spendings_df.iloc[:,0:10].sum(axis=1)
+spendings_df["overall_spendings"] = spendings_df[["without offer", "with offer"]].sum(axis=1)
 
+### Build customer groups with clustering
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+scaler.fit(profile[["age", "income", "memberdays"]])
+profile[["age_scaled", "income_scaled", "memberdays_scaled"]] = scaler.transform(profile[["age", "income", "memberdays"]])
 
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
 
+X = profile[["age_scaled", "income_scaled", "memberdays_scaled", "gender_F", "gender_M"]]
 
-cols = portfolio["offer_id"].to_list()
-cols.extend(["without offer"])
+sil_score_max = -1
 
-amount_df = pd.DataFrame(index=None, columns=cols)
-amount_df
+for n_clusters in range(2,6):
+  model = KMeans(n_clusters = n_clusters, init='k-means++', max_iter=100, n_init=1)
+  labels = model.fit_predict(X)
+  sil_score = silhouette_score(X, labels)
+  print("The average silhouette score for %i clusters is %0.2f" %(n_clusters,sil_score))
+  if sil_score > sil_score_max:
+    sil_score_max = sil_score
+    best_n_clusters = n_clusters
+    
+final_model = KMeans(n_clusters = best_n_clusters, init='k-means++', max_iter=100, n_init=1)
+final_model.fit_predict(X)
+final_model.labels_
 
+profile["cluster"] = final_model.labels_
 
-### Profile
-profile["id"].duplicated().sum()
-profile["age"] = profile["age"].apply(lambda x: np.nan if x == 118 else x)
-profile["membersince"] = datetime.today().date() - pd.to_datetime(profile["became_member_on"], format='%Y%m%d').dt.date
 
