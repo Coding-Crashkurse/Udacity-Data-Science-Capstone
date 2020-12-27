@@ -82,14 +82,64 @@ for index, person in enumerate(response_df.index):
 ### EDA to check responsiveness between the soziodemographic variables
 profile = profile.merge(response_df, left_on="id", right_index=True)
 profile["income_cat"] = pd.cut(profile["income"], 3)
-relevant_columns = portfolio["offer_id"].to_list()
+profile["age_cat"] = pd.cut(profile["age"], 5)
 
+relevant_columns = portfolio["offer_id"].to_list()
+relevant_columns
+
+overall = profile[relevant_columns].apply(lambda x: round(pd.Series.value_counts(x) / len(x), 4)* 100)
+overall
+
+
+
+income_list = []
 for col in relevant_columns:
     subset = profile[profile[col] != "not received"]
-    print(subset[col].value_counts())
+    cross_tab = pd.crosstab(subset["income_cat"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    income_list.append(result)  
+  
+age_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["age_cat"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    age_list.append(result)
 
-profile.groupby("income_cat").agg({"2906b810c7d4411798c6938adc9daaa5": "count"})
+gender_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["gender_M"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    gender_list.append(result)
+
+import matplotlib.pyplot as plt
+
+sns.barplot(data=income_list[0], x="offer", y="value", hue="income_cat")
+
+
+def plot_dflist(dflist, hue_var, grid=True):
+    if(grid):
+        fig, axes = plt.subplots(ncols=2, nrows=5)
+        for i, ax in zip(range(len(dflist)), axes.flat):
+            plot = sns.barplot(data=dflist[i], x="offer", y="value", hue=hue_var, ax=ax)
+            plot.legend_.remove()
+        plt.figure(figsize=(10,8))
+        plt.show()
+    else:
+        for i, df in enumerate(dflist):
+            plt.figure(i)
+            sns.barplot(data=df, x="offer", y="value", hue=hue_var)
         
+        
+plot_dflist(income_list, hue_var="income_cat")
+plot_dflist(age_list, hue_var="age_cat")
+plot_dflist(gender_list, hue_var="gender_M")
+
+
         
 def summarise_spendings(person):
     spendings = person.groupby("offer_id", as_index=False)["amount"].sum()
