@@ -24,6 +24,8 @@ portfolio = pd.concat([portfolio, portfolio["channels"].str.join('|').str.get_du
 portfolio.drop(columns = ["channels"], inplace=True)
 portfolio = pd.get_dummies(portfolio, columns=["offer_type"], prefix="d")
 portfolio.rename(columns={"id": "offer_id"}, inplace=True)
+sns.displot(data=profile, x="age")
+sns.displot(data=profile, x="income")
 
 
 offers = transcript.copy()
@@ -76,6 +78,19 @@ for index, person in enumerate(response_df.index):
         response = reaction_to_offer(one_person, offer)
         response_df.loc[person, offer] = response
         
+        
+### EDA to check responsiveness between the soziodemographic variables
+profile = profile.merge(response_df, left_on="id", right_index=True)
+profile["income_cat"] = pd.cut(profile["income"], 3)
+relevant_columns = portfolio["offer_id"].to_list()
+
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    print(subset[col].value_counts())
+
+profile.groupby("income_cat").agg({"2906b810c7d4411798c6938adc9daaa5": "count"})
+        
+        
 def summarise_spendings(person):
     spendings = person.groupby("offer_id", as_index=False)["amount"].sum()
     spendings = spendings.transpose()
@@ -116,7 +131,7 @@ X = profile[["age_scaled", "income_scaled", "memberdays_scaled", "gender_F", "ge
 
 sil_score_max = -1
 
-for n_clusters in range(2,6):
+for n_clusters in range(3,6):
   model = KMeans(n_clusters = n_clusters, init='k-means++', max_iter=100, n_init=1)
   labels = model.fit_predict(X)
   sil_score = silhouette_score(X, labels)
