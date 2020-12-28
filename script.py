@@ -4,6 +4,7 @@ from datetime import datetime
 import itertools
 from operator import itemgetter
 import seaborn as sns
+import matplotlib.pyplot as plt
 
 portfolio = pd.read_json('C:/Users/User/Desktop/Udacity/data/portfolio.json', orient='records', lines=True)
 profile = pd.read_json('C:/Users/User/Desktop/Udacity/data/profile.json', orient='records', lines=True)
@@ -16,7 +17,7 @@ profile['memberdays'] = datetime.today().date() - pd.to_datetime(profile['became
 profile['memberdays'] = profile['memberdays'].dt.days
 profile = pd.get_dummies(data=profile, columns=["gender"])
 profile.drop("gender_O", axis=1, inplace=True)
-
+profile.reset_index(drop=True, inplace=True)
 
 ### Portfolio
 portfolio["channels"].str.join('|').str.get_dummies()
@@ -69,78 +70,19 @@ def reaction_to_offer(df, offer_id):
         return "unresponsive"
 
 
-response_df = pd.DataFrame(index=profile.id, columns=portfolio["offer_id"])
+def create_response_df():
+    response_df = pd.DataFrame(index=profile.id, columns=portfolio["offer_id"])
 
-for index, person in enumerate(response_df.index):
-    print(f'{index}/{len(response_df)} verarbeitet...')
-    one_person = create_single_customer_history(person)
-    for offer in response_df.columns:
-        response = reaction_to_offer(one_person, offer)
-        response_df.loc[person, offer] = response
-        
-        
-### EDA to check responsiveness between the soziodemographic variables
-profile = profile.merge(response_df, left_on="id", right_index=True)
-profile["income_cat"] = pd.cut(profile["income"], 3)
-profile["age_cat"] = pd.cut(profile["age"], 5)
+    for index, person in enumerate(response_df.index):
+        print(f'{index}/{len(response_df)} verarbeitet...')
+        one_person = create_single_customer_history(person)
+        for offer in response_df.columns:
+            response = reaction_to_offer(one_person, offer)
+            response_df.loc[person, offer] = response
+    return response_df
 
-relevant_columns = portfolio["offer_id"].to_list()
-relevant_columns
+response_df = create_response_df()
 
-overall = profile[relevant_columns].apply(lambda x: round(pd.Series.value_counts(x) / len(x), 4)* 100)
-overall
-
-
-
-income_list = []
-for col in relevant_columns:
-    subset = profile[profile[col] != "not received"]
-    cross_tab = pd.crosstab(subset["income_cat"], subset[col], normalize="index").round(4)*100
-    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
-    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
-    income_list.append(result)  
-  
-age_list = []
-for col in relevant_columns:
-    subset = profile[profile[col] != "not received"]
-    cross_tab = pd.crosstab(subset["age_cat"], subset[col], normalize="index").round(4)*100
-    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
-    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
-    age_list.append(result)
-
-gender_list = []
-for col in relevant_columns:
-    subset = profile[profile[col] != "not received"]
-    cross_tab = pd.crosstab(subset["gender_M"], subset[col], normalize="index").round(4)*100
-    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
-    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
-    gender_list.append(result)
-
-import matplotlib.pyplot as plt
-
-sns.barplot(data=income_list[0], x="offer", y="value", hue="income_cat")
-
-
-def plot_dflist(dflist, hue_var, grid=True):
-    if(grid):
-        fig, axes = plt.subplots(ncols=2, nrows=5)
-        for i, ax in zip(range(len(dflist)), axes.flat):
-            plot = sns.barplot(data=dflist[i], x="offer", y="value", hue=hue_var, ax=ax)
-            plot.legend_.remove()
-        plt.figure(figsize=(10,8))
-        plt.show()
-    else:
-        for i, df in enumerate(dflist):
-            plt.figure(i)
-            sns.barplot(data=df, x="offer", y="value", hue=hue_var)
-        
-        
-plot_dflist(income_list, hue_var="income_cat")
-plot_dflist(age_list, hue_var="age_cat")
-plot_dflist(gender_list, hue_var="gender_M")
-
-
-        
 def summarise_spendings(person):
     spendings = person.groupby("offer_id", as_index=False)["amount"].sum()
     spendings = spendings.transpose()
@@ -166,34 +108,173 @@ def create_spendings(person_df):
 spendings_df = create_spendings(person_df=profile)
 spendings_df["with offer"] = spendings_df.iloc[:,0:10].sum(axis=1)
 spendings_df["overall_spendings"] = spendings_df[["without offer", "with offer"]].sum(axis=1)
+        
+### EDA to check responsiveness between the soziodemographic variables
+profile = profile.merge(response_df, left_on="id", right_index=True)
+profile = profile.merge(spendings_df[["overall_spendings", "without offer", "with offer"]], left_on="id", right_index=True)
+profile["income_cat"] = pd.cut(profile["income"], 3)
+profile["age_cat"] = pd.cut(profile["age"], 5)
+profile["spendings_cat"] = pd.cut(profile["overall_spendings"], 4)
 
-### Build customer groups with clustering
-from sklearn.preprocessing import MinMaxScaler
-scaler = MinMaxScaler()
-scaler.fit(profile[["age", "income", "memberdays"]])
-profile[["age_scaled", "income_scaled", "memberdays_scaled"]] = scaler.transform(profile[["age", "income", "memberdays"]])
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-import matplotlib.pyplot as plt
+relevant_columns = portfolio["offer_id"].to_list()
+relevant_columns
 
-X = profile[["age_scaled", "income_scaled", "memberdays_scaled", "gender_F", "gender_M"]]
+profile[relevant_columns]
+overall = profile[relevant_columns].mask(lambda x: x.eq('not received')).apply(pd.value_counts)
+overall_perc = profile[relevant_columns].mask(lambda x: x.eq('not received')).apply(pd.value_counts, normalize=True).mul(100).round(4)
 
-sil_score_max = -1
+income_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["income_cat"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    income_list.append(result)  
+  
+age_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["age_cat"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    age_list.append(result)
 
-for n_clusters in range(3,6):
-  model = KMeans(n_clusters = n_clusters, init='k-means++', max_iter=100, n_init=1)
-  labels = model.fit_predict(X)
-  sil_score = silhouette_score(X, labels)
-  print("The average silhouette score for %i clusters is %0.2f" %(n_clusters,sil_score))
-  if sil_score > sil_score_max:
-    sil_score_max = sil_score
-    best_n_clusters = n_clusters
+gender_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["gender_M"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    gender_list.append(result)
     
-final_model = KMeans(n_clusters = best_n_clusters, init='k-means++', max_iter=100, n_init=1)
-final_model.fit_predict(X)
-final_model.labels_
+spendings_list = []
+for col in relevant_columns:
+    subset = profile[profile[col] != "not received"]
+    cross_tab = pd.crosstab(subset["spendings_cat"], subset[col], normalize="index").round(4)*100
+    result = cross_tab.stack().reset_index().rename(columns={0: "value"})
+    result.rename(columns={result.columns[1] : "offer"}, inplace=True)
+    spendings_list.append(result)
 
-profile["cluster"] = final_model.labels_
+
+def plot_dflist(dflist, hue_var, grid=True):
+    if(grid):
+        fig, axes = plt.subplots(ncols=2, nrows=5)
+        for i, ax in zip(range(len(dflist)), axes.flat):
+            plot = sns.barplot(data=dflist[i], x="offer", y="value", hue=hue_var, ax=ax)
+            plot.legend_.remove()
+        plt.figure(figsize=(10,8))
+        plt.show()
+    else:
+        for i, df in enumerate(dflist):
+            plt.figure(i)
+            sns.barplot(data=df, x="offer", y="value", hue=hue_var)
+        
+        
+plot_dflist(income_list, hue_var="income_cat")
+plot_dflist(age_list, hue_var="age_cat")
+plot_dflist(gender_list, hue_var="gender_M")
+plot_dflist(spendings_list, hue_var="spendings_cat")
+
+### Can we predict the responses to the offers?
+from sklearn.model_selection import train_test_split
+from sklearn.multiclass import OneVsOneClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
+from sklearn.metrics import confusion_matrix
+
+from imblearn.over_sampling import SMOTE
+
+random_state = 0
+classifiers = []
+classifiers.append(OneVsOneClassifier(LogisticRegression(), n_jobs=-1))
+classifiers.append(OneVsOneClassifier(KNeighborsClassifier(), n_jobs=-1))
+classifiers.append(OneVsOneClassifier(DecisionTreeClassifier(), n_jobs=-1))
+classifiers.append(OneVsOneClassifier(RandomForestClassifier(), n_jobs=-1))
+classifiers.append(OneVsOneClassifier(AdaBoostClassifier(DecisionTreeClassifier(), learning_rate=0.1), n_jobs=-1))
+classifiers.append(OneVsOneClassifier(GradientBoostingClassifier(), n_jobs=-1))
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import LabelEncoder
+scaler = MinMaxScaler()
+LE = LabelEncoder()
+ros = SMOTE(sampling_strategy="auto", random_state=0, k_neighbors=5, n_jobs=-1)
+
+def build_prediction_df(profile, Y_var, oversampling=True):
+    from sklearn.preprocessing import MinMaxScaler
+    from sklearn.preprocessing import LabelEncoder
+    scaler = MinMaxScaler()
+    LE = LabelEncoder()
+    prediction_df = profile[["age", "income", "memberdays", "gender_F", "gender_M", "overall_spendings" , Y_var]]
+    prediction_df = prediction_df[prediction_df[Y_var] != "not received"]
+    prediction_df[["age", "income", "memberdays", "overall_spendings"]] = scaler.fit_transform(prediction_df[["age", "income", "memberdays", "overall_spendings"]])
+    prediction_df[Y_var] = LE.fit_transform(prediction_df[Y_var])
+    X = prediction_df.drop(Y_var, axis=1)
+    y = prediction_df[Y_var]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
+    if oversampling:
+        X_train, y_train = ros.fit_resample(X_train, y_train)
+    #print(f'N in training data: {len(y_train)}')
+    clf = OneVsOneClassifier(GradientBoostingClassifier(), n_jobs=-1)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+    return cm
+
+models = []
+for column in relevant_columns:
+    models.append(build_prediction_df(profile, column, oversampling=True))
+
+for model in models:
+    if len(model) == 3: ### Kick out informational
+        print(model[1,1] / model[1].sum() * 100)
+
+
+### Predict the spendings
+sns.displot(profile, x="overall_spendings")
+
+#profile_reg = profile_reg[profile_reg["overall_spendings"] < 250]
+overall_spendings = profile[["income", "overall_spendings"]]
+without_offer = profile[["income", "without offer"]].dropna().astype("int64")
+with_offer = profile[["income", "with offer"]].dropna().astype("int64")
+
+sns.displot(profile, x="overall_spendings")
+sns.lineplot(data=overall_spendings, x="income", y="overall_spendings")
+sns.lineplot(data=without_offer, x="income", y="without offer")
+sns.lineplot(data=with_offer, x="income", y="with offer")
+
+
+sns.lineplot(data=profile, x="income", y="overall_spendings")
+sns.lineplot(data=profile, x="memberdays", y="overall_spendings")
+sns.lineplot(data=profile, x="age", y="overall_spendings")
+sns.heatmap(profile[["age", "income", "gender_F", "gender_M"]].corr(), annot=True)
+
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.linear_model import RidgeCV
+from sklearn.metrics import mean_squared_error
+
+prediction_df = profile[["age", "income", "memberdays", "gender_F", "gender_M", "overall_spendings"]]
+#prediction_df = prediction_df[prediction_df["overall_spendings"] < 300]
+
+prediction_df[["age", "income", "memberdays"]] = scaler.fit_transform(prediction_df[["age", "income", "memberdays"]])
+X = prediction_df.drop("overall_spendings", axis=1)
+y = prediction_df["overall_spendings"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
+
+regr_trans = TransformedTargetRegressor(regressor=RidgeCV(), func=np.log1p, inverse_func=np.expm1)
+regr_trans.fit(X_train, y_train)
+y_pred = regr_trans.predict(X_test)
+y_test.reset_index(drop=True, inplace=True)
+
+result = pd.concat([y_test, pd.Series(y_pred)], axis=1)
+result.rename(columns={0: "prediction", "overall_spendings": "actual_value"}, inplace=True)
+
+mean_squared_error(y_test, y_pred)
+
+sns.scatterplot(data=result, y="actual_value", x="prediction")
+
 
 
